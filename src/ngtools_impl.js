@@ -45,23 +45,25 @@ function listLazyRoutesOfModule(entryModule, host, reflector) {
     const modulePath = `./${containingFile.replace(/^(.*)\//, '')}`;
     const className = entryRouteDef.className;
     // List loadChildren of this single module.
-    const staticSymbol = reflector.findDeclaration(modulePath, className, containingFile);
+    const appStaticSymbol = reflector.findDeclaration(modulePath, className, containingFile);
     const ROUTES = reflector.findDeclaration(ROUTER_MODULE_PATH, ROUTER_ROUTES_SYMBOL_NAME);
-    const lazyRoutes = _extractLazyRoutesFromStaticModule(staticSymbol, reflector, host, ROUTES);
-    const routes = {};
-    lazyRoutes.forEach((lazyRoute) => {
+    const lazyRoutes = _extractLazyRoutesFromStaticModule(appStaticSymbol, reflector, host, ROUTES);
+    const allLazyRoutes = lazyRoutes.reduce(function includeLazyRouteAndSubRoutes(allRoutes, lazyRoute) {
         const route = lazyRoute.routeDef.toString();
-        _assertRoute(routes, lazyRoute);
-        routes[route] = lazyRoute;
+        _assertRoute(allRoutes, lazyRoute);
+        allRoutes[route] = lazyRoute;
+        // StaticReflector does not support discovering annotations like `NgModule` on default
+        // exports
+        // Which means: if a default export NgModule was lazy-loaded, we can discover it, but,
+        //  we cannot parse its routes to see if they have loadChildren or not.
+        if (!lazyRoute.routeDef.className) {
+            return allRoutes;
+        }
         const lazyModuleSymbol = reflector.findDeclaration(lazyRoute.absoluteFilePath, lazyRoute.routeDef.className || 'default');
         const subRoutes = _extractLazyRoutesFromStaticModule(lazyModuleSymbol, reflector, host, ROUTES);
-        // Populate the map using the routes we just found.
-        subRoutes.forEach(subRoute => {
-            _assertRoute(routes, subRoute);
-            routes[subRoute.routeDef.toString()] = subRoute;
-        });
-    });
-    return routes;
+        return subRoutes.reduce(includeLazyRouteAndSubRoutes, allRoutes);
+    }, {});
+    return allLazyRoutes;
 }
 exports.listLazyRoutesOfModule = listLazyRoutesOfModule;
 /**
@@ -148,7 +150,7 @@ function _collectRoutes(providers, reflector, ROUTES) {
  */
 function _collectLoadChildren(routes) {
     return routes.reduce((m, r) => {
-        if (r.loadChildren) {
+        if (r.loadChildren && typeof r.loadChildren === 'string') {
             return m.concat(r.loadChildren);
         }
         else if (Array.isArray(r)) {

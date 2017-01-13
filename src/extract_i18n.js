@@ -1,32 +1,10 @@
 #!/usr/bin/env node
 "use strict";
 require('reflect-metadata');
-const compiler = require('@angular/compiler');
 const tsc = require('@angular/tsc-wrapped');
-const path = require('path');
 const extractor_1 = require('./extractor');
 function extract(ngOptions, cliOptions, program, host) {
-    const extractor = extractor_1.Extractor.create(ngOptions, cliOptions.i18nFormat, program, host);
-    const bundlePromise = extractor.extract();
-    return (bundlePromise).then(messageBundle => {
-        let ext;
-        let serializer;
-        const format = (cliOptions.i18nFormat || 'xlf').toLowerCase();
-        switch (format) {
-            case 'xmb':
-                ext = 'xmb';
-                serializer = new compiler.Xmb();
-                break;
-            case 'xliff':
-            case 'xlf':
-            default:
-                ext = 'xlf';
-                serializer = new compiler.Xliff();
-                break;
-        }
-        const dstPath = path.join(ngOptions.genDir, `messages.${ext}`);
-        host.writeFile(dstPath, messageBundle.write(serializer), false);
-    });
+    return extractor_1.Extractor.create(ngOptions, program, host).extract(cliOptions.i18nFormat);
 }
 // Entry point
 if (require.main === module) {

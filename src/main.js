@@ -2,6 +2,7 @@
 "use strict";
 require('reflect-metadata');
 const tsc = require('@angular/tsc-wrapped');
+const compiler_1 = require('@angular/compiler');
 const codegen_1 = require('./codegen');
 function codegen(ngOptions, cliOptions, program, host) {
     return codegen_1.CodeGenerator.create(ngOptions, cliOptions, program, host).codegen();
@@ -10,7 +11,7 @@ function main(args, consoleError = console.error) {
     const project = args.p || args.project || '.';
     const cliOptions = new tsc.NgcCliOptions(args);
     return tsc.main(project, cliOptions, codegen).then(() => 0).catch(e => {
-        if (e instanceof tsc.UserError) {
+        if (e instanceof tsc.UserError || e instanceof compiler_1.SyntaxError) {
             consoleError(e.message);
             return Promise.resolve(1);
         }

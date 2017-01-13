@@ -15,6 +15,7 @@
 const compiler_1 = require('@angular/compiler');
 const codegen_1 = require('./codegen');
 const compiler_host_1 = require('./compiler_host');
+const extractor_1 = require('./extractor');
 const ngtools_impl_1 = require('./ngtools_impl');
 const path_mapped_compiler_host_1 = require('./path_mapped_compiler_host');
 /**
@@ -61,12 +62,25 @@ class NgTools_InternalApi_NG_2 {
         const ngCompilerHost = usePathMapping ?
             new path_mapped_compiler_host_1.PathMappedCompilerHost(program, angularCompilerOptions, moduleResolutionHost) :
             new compiler_host_1.CompilerHost(program, angularCompilerOptions, moduleResolutionHost);
-        const staticReflector = new compiler_1.StaticReflector(ngCompilerHost);
+        const symbolCache = new compiler_1.StaticSymbolCache();
+        const summaryResolver = new compiler_1.AotSummaryResolver(ngCompilerHost, symbolCache);
+        const symbolResolver = new compiler_1.StaticSymbolResolver(ngCompilerHost, symbolCache, summaryResolver);
+        const staticReflector = new compiler_1.StaticReflector(symbolResolver);
         const routeMap = ngtools_impl_1.listLazyRoutesOfModule(options.entryModule, ngCompilerHost, staticReflector);
         return Object.keys(routeMap).reduce((acc, route) => {
             acc[route] = routeMap[route].absoluteFilePath;
             return acc;
         }, {});
+    }
+    /**
+     * @internal
+     * @private
+     */
+    static extractI18n(options) {
+        const hostContext = new CustomLoaderModuleResolutionHostAdapter(options.readResource, options.host);
+        // Create the i18n extractor.
+        const extractor = extractor_1.Extractor.create(options.angularCompilerOptions, options.program, options.host, hostContext);
+        return extractor.extract(options.i18nFormat);
     }
 }
 exports.NgTools_InternalApi_NG_2 = NgTools_InternalApi_NG_2;

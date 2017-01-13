@@ -14,6 +14,8 @@ const EXT = /(\.ts|\.d\.ts|\.js|\.jsx|\.tsx)$/;
 const DTS = /\.d\.ts$/;
 const NODE_MODULES = '/node_modules/';
 const IS_GENERATED = /\.(ngfactory|ngstyle)$/;
+const GENERATED_FILES = /\.ngfactory\.ts$|\.ngstyle\.ts$/;
+const GENERATED_OR_DTS_FILES = /\.d\.ts$|\.ngfactory\.ts$|\.ngstyle\.ts$/;
 class CompilerHost {
     constructor(program, options, context) {
         this.program = program;
@@ -26,6 +28,24 @@ class CompilerHost {
         this.genDir = path.normalize(path.join(this.options.genDir, '.')).replace(/\\/g, '/');
         const genPath = path.relative(this.basePath, this.genDir);
         this.isGenDirChildOfRootDir = genPath === '' || !genPath.startsWith('..');
+        this.resolveModuleNameHost = Object.create(this.context);
+        // When calling ts.resolveModuleName,
+        // additional allow checks for .d.ts files to be done based on
+        // checks for .ngsummary.json files,
+        // so that our codegen depends on fewer inputs and requires to be called
+        // less often.
+        // This is needed as we use ts.resolveModuleName in reflector_host
+        // and it should be able to resolve summary file names.
+        this.resolveModuleNameHost.fileExists = (fileName) => {
+            if (this.context.fileExists(fileName)) {
+                return true;
+            }
+            if (DTS.test(fileName)) {
+                const base = fileName.substring(0, fileName.length - 5);
+                return this.context.fileExists(base + '.ngsummary.json');
+            }
+            return false;
+        };
     }
     // We use absolute paths on disk as canonical.
     getCanonicalFileName(fileName) { return fileName; }
@@ -38,7 +58,7 @@ class CompilerHost {
             containingFile = this.getCanonicalFileName(path.join(this.basePath, 'index.ts'));
         }
         m = m.replace(EXT, '');
-        const resolved = ts.resolveModuleName(m, containingFile.replace(/\\/g, '/'), this.options, this.context)
+        const resolved = ts.resolveModuleName(m, containingFile.replace(/\\/g, '/'), this.options, this.resolveModuleNameHost)
             .resolvedModule;
         return resolved ? this.getCanonicalFileName(resolved.resolvedFileName) : null;
     }
@@ -141,6 +161,12 @@ class CompilerHost {
             if (this.context.fileExists(metadataPath)) {
                 return this.readMetadata(metadataPath, filePath);
             }
+            else {
+                // If there is a .d.ts file but no metadata file we need to produce a
+                // v3 metadata from the .d.ts file as v3 includes the exports we need
+                // to resolve symbols.
+                return [this.upgradeVersion1Metadata({ '__symbolic': 'module', 'version': 1, 'metadata': {} }, filePath)];
+            }
         }
         else {
             const sf = this.getSourceFile(filePath);
@@ -158,29 +184,10 @@ class CompilerHost {
             const metadatas = metadataOrMetadatas ?
                 (Array.isArray(metadataOrMetadatas) ? metadataOrMetadatas : [metadataOrMetadatas]) :
                 [];
-            const v1Metadata = metadatas.find((m) => m['version'] === 1);
-            let v2Metadata = metadatas.find((m) => m['version'] === 2);
-            if (!v2Metadata && v1Metadata) {
-                // patch up v1 to v2 by merging the metadata with metadata collected from the d.ts file
-                // as the only difference between the versions is whether all exports are contained in
-                // the metadata and the `extends` clause.
-                v2Metadata = { '__symbolic': 'module', 'version': 2, 'metadata': {} };
-                if (v1Metadata.exports) {
-                    v2Metadata.exports = v1Metadata.exports;
-                }
-                for (let prop in v1Metadata.metadata) {
-                    v2Metadata.metadata[prop] = v1Metadata.metadata[prop];
-                }
-                const sourceText = this.context.readFile(dtsFilePath);
-                const exports = this.metadataCollector.getMetadata(this.getSourceFile(dtsFilePath));
-                if (exports) {
-                    for (let prop in exports.metadata) {
-                        if (!v2Metadata.metadata[prop]) {
-                            v2Metadata.metadata[prop] = exports.metadata[prop];
-                        }
-                    }
-                }
-                metadatas.push(v2Metadata);
+            const v1Metadata = metadatas.find(m => m.version === 1);
+            let v3Metadata = metadatas.find(m => m.version === 3);
+            if (!v3Metadata && v1Metadata) {
+                metadatas.push(this.upgradeVersion1Metadata(v1Metadata, dtsFilePath));
             }
             this.resolverCache.set(filePath, metadatas);
             return metadatas;
@@ -190,10 +197,42 @@ class CompilerHost {
             throw e;
         }
     }
+    upgradeVersion1Metadata(v1Metadata, dtsFilePath) {
+        // patch up v1 to v3 by merging the metadata with metadata collected from the d.ts file
+        // as the only difference between the versions is whether all exports are contained in
+        // the metadata and the `extends` clause.
+        let v3Metadata = { '__symbolic': 'module', 'version': 3, 'metadata': {} };
+        if (v1Metadata.exports) {
+            v3Metadata.exports = v1Metadata.exports;
+        }
+        for (let prop in v1Metadata.metadata) {
+            v3Metadata.metadata[prop] = v1Metadata.metadata[prop];
+        }
+        const exports = this.metadataCollector.getMetadata(this.getSourceFile(dtsFilePath));
+        if (exports) {
+            for (let prop in exports.metadata) {
+                if (!v3Metadata.metadata[prop]) {
+                    v3Metadata.metadata[prop] = exports.metadata[prop];
+                }
+            }
+            if (exports.exports) {
+                v3Metadata.exports = exports.exports;
+            }
+        }
+        return v3Metadata;
+    }
     loadResource(filePath) { return this.context.readResource(filePath); }
-    loadSummary(filePath) { return this.context.readFile(filePath); }
+    loadSummary(filePath) {
+        if (this.context.fileExists(filePath)) {
+            return this.context.readFile(filePath);
+        }
+    }
     getOutputFileName(sourceFilePath) {
         return sourceFilePath.replace(EXT, '') + '.d.ts';
+    }
+    isSourceFile(filePath) {
+        const excludeRegex = this.options.generateCodeForLibraries === false ? GENERATED_OR_DTS_FILES : GENERATED_FILES;
+        return !excludeRegex.test(filePath);
     }
 }
 exports.CompilerHost = CompilerHost;
