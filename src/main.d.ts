@@ -1,4 +1,3 @@
-/// <amd-module name="angular/packages/compiler-cli/src/main" />
 import 'reflect-metadata';
 import * as ts from 'typescript';
 import * as api from './transformers/api';
